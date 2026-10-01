@@ -1,0 +1,40 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.coverage
+htmlcov/
+.idea/
+.vscode/
+.DS_Store
+*.log
+*.tmp
+*~
+
+# Local shell history and environment/secrets files never belong in the project.
+.bash_history
+.zsh_history
+.python_history
+.env
+.env.*
+!.env.example
+.secrets/
+secrets.*
+credentials.*
+*.key
+*.pem
+*.p12
+*.pfx
+
+# Paper records contain user PDFs and notes; do not commit them by default.
+data/papers/*
+!data/papers/.gitkeep
+data/combined_exports/*
+!data/combined_exports/.gitkeep
+
+# Standalone extractor runs contain uploaded PDFs and generated screenshots.
+extracted_exhibits/*
+!extracted_exhibits/.gitkeep

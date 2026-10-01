@@ -1,0 +1,27 @@
+schema_version = 1
+
+[workspace]
+name = "Workflow Hub"
+entrypoint = "launcher_app.py"
+port = 8500
+url = "http://localhost:8500"
+
+[[tools]]
+id = "paper-notes"
+name = "Paper Notes Organizer"
+description = "Read papers, keep structured notes, and create formatted exports from your own writing."
+icon = "📚"
+entrypoint = "app.py"
+port = 8501
+url = "http://localhost:8501"
+storage = "data"
+
+[[tools]]
+id = "table-figure-extractor"
+name = "Table and Figure Extractor"
+description = "Review deterministic table and figure crops from local PDFs, with no AI or external services."
+icon = "✂️"
+entrypoint = "extractor_app.py"
+port = 8502
+url = "http://localhost:8502"
+storage = "extracted_exhibits"
