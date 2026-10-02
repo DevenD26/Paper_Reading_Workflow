@@ -20,6 +20,7 @@ from paper_notes.exporters import (
 )
 from paper_notes.pdf_tools import crop_page, page_count, render_page
 from paper_notes.storage import (
+    PAPER_ORDER_FILENAME,
     blank_data_source,
     blank_empirical_strategy,
     blank_exhibit,
@@ -27,6 +28,7 @@ from paper_notes.storage import (
     delete_record,
     list_records,
     load_notes,
+    move_record,
     normalize_notes,
     safe_slug,
     save_notes,
@@ -59,6 +61,105 @@ class StorageAndExportTests(unittest.TestCase):
         self.assertEqual(first["record_id"], "same-paper")
         self.assertEqual(second["record_id"], "same-paper-2")
         self.assertTrue((self.root / "same-paper" / "source.pdf").is_file())
+        self.assertEqual(
+            [item["record_id"] for item in list_records(self.root)],
+            [second["record_id"], first["record_id"]],
+        )
+
+    def test_manual_moves_persist_and_stop_at_boundaries(self):
+        first = create_record(self.root, "First", MINIMAL_PDF, "first.pdf")
+        second = create_record(self.root, "Second", MINIMAL_PDF, "second.pdf")
+        third = create_record(self.root, "Third", MINIMAL_PDF, "third.pdf")
+
+        self.assertEqual(
+            [item["record_id"] for item in list_records(self.root)],
+            [third["record_id"], second["record_id"], first["record_id"]],
+        )
+        self.assertTrue(move_record(self.root, second["record_id"], -1))
+        expected = [second["record_id"], third["record_id"], first["record_id"]]
+        self.assertEqual([item["record_id"] for item in list_records(self.root)], expected)
+        self.assertEqual([item["record_id"] for item in list_records(self.root)], expected)
+        self.assertFalse(move_record(self.root, second["record_id"], -1))
+        self.assertFalse(move_record(self.root, first["record_id"], 1))
+        self.assertEqual([item["record_id"] for item in list_records(self.root)], expected)
+
+    def test_legacy_order_migration_is_deterministic_and_does_not_rewrite_notes(self):
+        oldest = create_record(self.root, "Oldest", MINIMAL_PDF, "oldest.pdf")
+        newest = create_record(self.root, "Newest", MINIMAL_PDF, "newest.pdf")
+        timestamps = {
+            oldest["record_id"]: "2026-01-01T00:00:00+00:00",
+            newest["record_id"]: "2026-02-01T00:00:00+00:00",
+        }
+        notes_paths = []
+        for record_id, timestamp in timestamps.items():
+            path = self.root / record_id / "notes.json"
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            payload["updated_at"] = timestamp
+            path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+            notes_paths.append(path)
+        (self.root / PAPER_ORDER_FILENAME).unlink()
+        before = {path: path.read_bytes() for path in notes_paths}
+
+        self.assertEqual(
+            [item["record_id"] for item in list_records(self.root)],
+            [newest["record_id"], oldest["record_id"]],
+        )
+        self.assertEqual(before, {path: path.read_bytes() for path in notes_paths})
+        self.assertTrue((self.root / PAPER_ORDER_FILENAME).is_file())
+
+    def test_new_papers_start_on_top_and_edits_do_not_reorder(self):
+        first = create_record(self.root, "First", MINIMAL_PDF, "first.pdf")
+        second = create_record(self.root, "Second", MINIMAL_PDF, "second.pdf")
+        move_record(self.root, first["record_id"], -1)
+        edited = load_notes(self.root, second["record_id"])
+        edited["title"] = "Renamed Second"
+        edited["categories"] = ["Week 6", "Methods"]
+        edited["created_at"] = "1999-01-01T00:00:00+00:00"
+        edited["sections"]["additional_notes"] = "Exact authored text."
+        save_notes(self.root, edited)
+        self.assertEqual(
+            [item["record_id"] for item in list_records(self.root)],
+            [first["record_id"], second["record_id"]],
+        )
+
+        third = create_record(self.root, "Third", MINIMAL_PDF, "third.pdf")
+        self.assertEqual(
+            [item["record_id"] for item in list_records(self.root)],
+            [third["record_id"], first["record_id"], second["record_id"]],
+        )
+
+    def test_invalid_and_stale_order_metadata_is_repaired(self):
+        first = create_record(self.root, "First", MINIMAL_PDF, "first.pdf")
+        second = create_record(self.root, "Second", MINIMAL_PDF, "second.pdf")
+        third = create_record(self.root, "Third", MINIMAL_PDF, "third.pdf")
+        order_path = self.root / PAPER_ORDER_FILENAME
+        order_path.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "record_ids": [
+                        first["record_id"],
+                        "deleted-record",
+                        first["record_id"],
+                        42,
+                        third["record_id"],
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        expected = [second["record_id"], first["record_id"], third["record_id"]]
+        self.assertEqual([item["record_id"] for item in list_records(self.root)], expected)
+        repaired = json.loads(order_path.read_text(encoding="utf-8"))
+        self.assertEqual(repaired["record_ids"], expected)
+
+        order_path.write_text("{not valid json", encoding="utf-8")
+        fallback = [third["record_id"], second["record_id"], first["record_id"]]
+        self.assertEqual([item["record_id"] for item in list_records(self.root)], fallback)
+        self.assertEqual(
+            json.loads(order_path.read_text(encoding="utf-8"))["record_ids"], fallback
+        )
 
     def test_notes_round_trip_preserves_wording_and_unicode(self):
         notes = create_record(self.root, "My Paper", MINIMAL_PDF, "paper.pdf")
@@ -98,6 +199,10 @@ class StorageAndExportTests(unittest.TestCase):
         self.assertFalse(deleted_folder.exists())
         self.assertTrue((self.root / retained["record_id"]).is_dir())
         self.assertEqual([item["record_id"] for item in list_records(self.root)], [retained["record_id"]])
+        self.assertEqual(
+            json.loads((self.root / PAPER_ORDER_FILENAME).read_text(encoding="utf-8"))["record_ids"],
+            [retained["record_id"]],
+        )
 
     def test_delete_record_rejects_invalid_identifier(self):
         with self.assertRaises(ValueError):
@@ -214,6 +319,26 @@ class StorageAndExportTests(unittest.TestCase):
 
         second_output = export_combined_summaries(self.root, [first], "Week 6 summaries")
         self.assertEqual(second_output.name, "Week 6 summaries_2.docx")
+
+    def test_combined_export_follows_custom_order_not_argument_or_title_order(self):
+        alpha = create_record(self.root, "Duplicate", MINIMAL_PDF, "alpha.pdf")
+        beta = create_record(self.root, "Duplicate", MINIMAL_PDF, "beta.pdf")
+        gamma = create_record(self.root, "Gamma", MINIMAL_PDF, "gamma.pdf")
+        for notes, marker in [(alpha, "ALPHA MARKER"), (beta, "BETA MARKER"), (gamma, "GAMMA MARKER")]:
+            notes["sections"]["one_minute_summary"] = marker
+            save_notes(self.root, notes)
+        move_record(self.root, alpha["record_id"], -1)
+        expected_ids = [gamma["record_id"], alpha["record_id"], beta["record_id"]]
+        self.assertEqual([item["record_id"] for item in list_records(self.root)], expected_ids)
+
+        output = export_combined_summaries(
+            self.root,
+            [beta, alpha, gamma],
+            "Ordered summaries",
+        )
+        text = "\n".join(paragraph.text for paragraph in Document(output).paragraphs)
+        self.assertLess(text.index("GAMMA MARKER"), text.index("ALPHA MARKER"))
+        self.assertLess(text.index("ALPHA MARKER"), text.index("BETA MARKER"))
 
     def test_group_export_selected_sections_order_columns_and_arial(self):
         notes = create_record(self.root, "Full Paper", MINIMAL_PDF, "paper.pdf")

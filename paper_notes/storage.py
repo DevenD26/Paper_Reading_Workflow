@@ -42,6 +42,9 @@ TEXT_SECTION_KEYS = [
     "additional_notes",
 ]
 
+PAPER_ORDER_FILENAME = "paper_order.json"
+PAPER_ORDER_SCHEMA_VERSION = 1
+
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
@@ -175,6 +178,19 @@ def _record_lock(folder: Path):
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
+@contextmanager
+def _paper_order_lock(data_root: Path):
+    """Serialize paper-order migration and mutations across local app processes."""
+    data_root.mkdir(parents=True, exist_ok=True)
+    lock_path = data_root / ".paper-order.lock"
+    with lock_path.open("a", encoding="utf-8") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
 def _load_notes_file(folder: Path, record_id: str) -> Dict[str, Any]:
     with (folder / "notes.json").open("r", encoding="utf-8") as source:
         payload = normalize_notes(json.load(source))
@@ -221,6 +237,8 @@ def create_record(
         (folder / "source.pdf").write_bytes(pdf_bytes)
         notes = new_notes(record_id, title, original_pdf_name)
         _atomic_json_write(folder / "notes.json", notes)
+        with _paper_order_lock(data_root):
+            _reconcile_paper_order_unlocked(data_root, _discover_records(data_root))
         return notes
     except Exception:
         shutil.rmtree(folder, ignore_errors=True)
@@ -250,18 +268,62 @@ def save_notes(data_root: Path, notes: Dict[str, Any]) -> Dict[str, Any]:
     with _record_lock(folder):
         current = _load_notes_file(folder, str(payload["record_id"]))
         if current["revision"] > payload["revision"]:
-            incoming_ids = {
-                item.get("id") for item in payload.get("exhibits", []) if isinstance(item, dict)
+            incoming_by_id = {
+                item.get("id"): item
+                for item in payload.get("exhibits", [])
+                if isinstance(item, dict) and item.get("id")
             }
-            linked_additions = [
-                item
+            current_ids = {
+                item.get("id")
                 for item in current.get("exhibits", [])
-                if isinstance(item, dict)
-                and item.get("id") not in incoming_ids
-                and item.get("extraction_source")
-            ]
-            payload["exhibits"].extend(deepcopy(linked_additions))
+                if isinstance(item, dict) and item.get("id")
+            }
+            merged_exhibits = []
+            for current_item in current.get("exhibits", []):
+                if not isinstance(current_item, dict):
+                    continue
+                item_id = current_item.get("id")
+                if item_id in incoming_by_id:
+                    merged_exhibits.append(incoming_by_id[item_id])
+                elif current_item.get("extraction_source"):
+                    merged_exhibits.append(deepcopy(current_item))
+            merged_exhibits.extend(
+                item
+                for item in payload.get("exhibits", [])
+                if not isinstance(item, dict) or item.get("id") not in current_ids
+            )
+            payload["exhibits"] = merged_exhibits
         return _write_notes_file(folder, payload, current["revision"])
+
+
+def move_exhibit(
+    data_root: Path,
+    record_id: str,
+    exhibit_id: str,
+    direction: int,
+) -> Dict[str, Any]:
+    """Move one exhibit by one position without altering the exhibit or its image files."""
+    if direction not in {-1, 1}:
+        raise ValueError("Exhibit direction must be -1 or 1")
+    folder = record_dir(data_root, record_id)
+    if not folder.is_dir():
+        raise FileNotFoundError("The paper record folder no longer exists")
+    with _record_lock(folder):
+        notes = _load_notes_file(folder, record_id)
+        exhibits = notes.get("exhibits", [])
+        matches = [
+            index
+            for index, exhibit in enumerate(exhibits)
+            if isinstance(exhibit, dict) and exhibit.get("id") == exhibit_id
+        ]
+        if len(matches) != 1:
+            raise ValueError("Exhibit not found")
+        index = matches[0]
+        destination = index + direction
+        if destination < 0 or destination >= len(exhibits):
+            return notes
+        exhibits[index], exhibits[destination] = exhibits[destination], exhibits[index]
+        return _write_notes_file(folder, notes, notes["revision"])
 
 
 def mutate_notes(data_root: Path, record_id: str, mutator):
@@ -294,13 +356,15 @@ def delete_record(data_root: Path, record_id: str) -> Dict[str, Any]:
     """Permanently delete exactly one validated paper record folder."""
     notes = load_notes(data_root, record_id)
     folder = record_dir(data_root, record_id)
-    if not folder.is_dir():
-        raise FileNotFoundError("The paper record folder no longer exists")
-    shutil.rmtree(folder)
+    with _paper_order_lock(data_root):
+        if not folder.is_dir():
+            raise FileNotFoundError("The paper record folder no longer exists")
+        shutil.rmtree(folder)
+        _reconcile_paper_order_unlocked(data_root, _discover_records(data_root))
     return notes
 
 
-def list_records(data_root: Path) -> List[Dict[str, Any]]:
+def _discover_records(data_root: Path) -> List[Dict[str, Any]]:
     if not data_root.exists():
         return []
     records: List[Dict[str, Any]] = []
@@ -314,7 +378,114 @@ def list_records(data_root: Path) -> List[Dict[str, Any]]:
             records.append(payload)
         except (OSError, ValueError, json.JSONDecodeError):
             continue
-    return sorted(records, key=lambda item: item.get("updated_at", ""), reverse=True)
+    return records
+
+
+def _legacy_record_order(records: Iterable[Dict[str, Any]]) -> List[str]:
+    """Reproduce the former newest-save-first menu order with deterministic ties."""
+    return [
+        str(item["record_id"])
+        for item in sorted(
+            records,
+            key=lambda item: (str(item.get("updated_at", "")), str(item.get("record_id", ""))),
+            reverse=True,
+        )
+    ]
+
+
+def _reconcile_paper_order_unlocked(
+    data_root: Path, records: Iterable[Dict[str, Any]]
+) -> List[str]:
+    """Return and persist one complete, valid ordering while the order lock is held."""
+    records = list(records)
+    legacy_order = _legacy_record_order(records)
+    available = set(legacy_order)
+    order_path = data_root / PAPER_ORDER_FILENAME
+    stored_order: Optional[List[Any]] = None
+    raw_payload: Any = None
+    try:
+        with order_path.open("r", encoding="utf-8") as source:
+            raw_payload = json.load(source)
+        if (
+            isinstance(raw_payload, dict)
+            and raw_payload.get("schema_version") == PAPER_ORDER_SCHEMA_VERSION
+            and isinstance(raw_payload.get("record_ids"), list)
+        ):
+            stored_order = raw_payload["record_ids"]
+    except (OSError, json.JSONDecodeError):
+        stored_order = None
+
+    if stored_order is None:
+        ordered_ids = legacy_order
+    else:
+        retained: List[str] = []
+        seen = set()
+        for value in stored_order:
+            if isinstance(value, str) and value in available and value not in seen:
+                retained.append(value)
+                seen.add(value)
+        # Records absent from existing metadata are new to the ordering system and
+        # belong at the top. Their legacy order makes simultaneous additions stable.
+        ordered_ids = [record_id for record_id in legacy_order if record_id not in seen]
+        ordered_ids.extend(retained)
+
+    normalized_payload = {
+        "schema_version": PAPER_ORDER_SCHEMA_VERSION,
+        "record_ids": ordered_ids,
+    }
+    if raw_payload != normalized_payload:
+        _atomic_json_write(order_path, normalized_payload)
+    return ordered_ids
+
+
+def list_records(data_root: Path) -> List[Dict[str, Any]]:
+    records = _discover_records(data_root)
+    if not records and not data_root.exists():
+        return []
+    with _paper_order_lock(data_root):
+        ordered_ids = _reconcile_paper_order_unlocked(data_root, records)
+    by_id = {str(item["record_id"]): item for item in records}
+    return [by_id[record_id] for record_id in ordered_ids]
+
+
+def order_records(data_root: Path, records: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Sort any record subset by the persistent main-menu order."""
+    selected = list(records)
+    with _paper_order_lock(data_root):
+        ordered_ids = _reconcile_paper_order_unlocked(data_root, _discover_records(data_root))
+    positions = {record_id: index for index, record_id in enumerate(ordered_ids)}
+    return sorted(
+        selected,
+        key=lambda item: positions.get(str(item.get("record_id", "")), len(positions)),
+    )
+
+
+def move_record(data_root: Path, record_id: str, direction: int) -> bool:
+    """Move one paper a single position; return whether its position changed."""
+    if direction not in (-1, 1):
+        raise ValueError("Paper moves must be one position up or down")
+    record_dir(data_root, record_id)
+    with _paper_order_lock(data_root):
+        records = _discover_records(data_root)
+        ordered_ids = _reconcile_paper_order_unlocked(data_root, records)
+        if record_id not in ordered_ids:
+            raise FileNotFoundError("The paper record folder no longer exists")
+        current_index = ordered_ids.index(record_id)
+        destination = current_index + direction
+        if destination < 0 or destination >= len(ordered_ids):
+            return False
+        ordered_ids[current_index], ordered_ids[destination] = (
+            ordered_ids[destination],
+            ordered_ids[current_index],
+        )
+        _atomic_json_write(
+            data_root / PAPER_ORDER_FILENAME,
+            {
+                "schema_version": PAPER_ORDER_SCHEMA_VERSION,
+                "record_ids": ordered_ids,
+            },
+        )
+        return True
 
 
 def section_completion(notes: Dict[str, Any]) -> Dict[str, bool]:

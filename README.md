@@ -78,16 +78,17 @@ python -m streamlit run extractor_app.py --server.port 8502
 
 1. Choose **New reading record**, enter a title, and upload the paper PDF.
 2. Read the PDF page by page in the left pane and write in the ordered sections on the right.
-3. Add as many collapsible data sources, empirical strategies, and table/figure entries as needed.
+3. Add as many collapsible data sources, empirical strategies, and table/figure entries as needed. Use **Move up** and **Move down** on any table/figure entry to set the saved display and export order; extractor results and manually added screenshots can be interleaved.
 4. For a strategy or exhibit image, either upload a screenshot already saved on your computer or use the manual cropping tool on a PDF page. Both options remain available for every entry.
 5. To import extractor output, choose several screenshots at once under **Add several saved screenshots** and select **Add selected screenshots**. Each selected file becomes a separate exhibit whose initial title comes from its filename.
 6. Empirical-strategy entries can include a description and an optional LaTeX equation with a live preview.
 7. Prepare and download Markdown or Word exports at the bottom of the notes pane. Individual Word exports place review notes (including concerns and extensions) first in two columns, empirical strategies next in two columns, and tables and figures last on full-width pages.
 8. When you finish working on a paper, choose **Done** to save and return to the main menu. From there, reopen any paper or create a new one.
-9. On the main menu, add comma-separated categories to individual papers, or check several papers and add one category to all of them.
-10. Edit a saved paper title directly from the main menu. The stable storage folder remains unchanged, while future exports use the new title.
-11. To remove a paper, choose **Delete paper** on the main menu and complete the confirmation. This permanently deletes that paper's PDF, notes, screenshots/crops, and individual formatted exports. Existing combined export files are not changed.
-12. Check multiple papers, choose the sections to include, and use **Combined paper export** to create a compact Word review document. Review and empirical-strategy content uses two columns; tables and figures use full-width pages. Papers without content in the chosen sections are skipped.
+9. On the main menu, use the **↑** and **↓** buttons beneath each paper's **Select** checkbox to set a persistent paper order. New papers start at the top; editing a title, category, label, or note does not change the order.
+10. Add comma-separated categories to individual papers, or check several papers and add one category to all of them.
+11. Edit a saved paper title directly from the main menu. The stable storage folder remains unchanged, while future exports use the new title.
+12. To remove a paper, choose **Delete paper** on the main menu and complete the confirmation. This permanently deletes that paper's PDF, notes, screenshots/crops, and individual formatted exports. Existing combined export files are not changed.
+13. Check multiple papers, choose the sections to include, and use **Combined paper export** to create a compact Word review document in the visible custom paper order. Review and empirical-strategy content uses two columns; tables and figures use full-width pages. Papers without content in the chosen sections are skipped.
 
 Text changes save locally when you leave a field or press `Ctrl+Enter` / `⌘+Enter`. Empty/started indicators are informational only; the app never fills a section.
 
@@ -112,6 +113,10 @@ data/papers/<paper-name>/
 ```
 
 Creating another paper with the same title adds a numeric suffix instead of overwriting the first record. The original filename is kept as metadata, while the durable local copy is always named `source.pdf` inside its record folder.
+
+The custom main-menu order is stored in `data/papers/paper_order.json` by stable record
+ID. It is separate from every paper's notes and timestamps. The app creates it
+automatically for existing installations without changing any `notes.json` file.
 
 Back up the `data` folder to preserve all PDFs, notes, crops, individual exports, and combined exports. Paper records are excluded from Git by default because they may contain copyrighted or private material.
 

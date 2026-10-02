@@ -11,7 +11,7 @@ from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Inches, Pt, RGBColor
 
-from .storage import SECTION_LABELS, record_dir
+from .storage import SECTION_LABELS, order_records, record_dir
 
 
 GROUP_EXPORT_SECTIONS = [
@@ -494,7 +494,10 @@ def export_combined_papers(
     selected &= allowed
     if not selected:
         raise ValueError("Choose at least one section to export.")
-    papers = [notes for notes in selected_notes if paper_has_selected_content(notes, selected)]
+    papers = order_records(
+        data_root,
+        [notes for notes in selected_notes if paper_has_selected_content(notes, selected)],
+    )
     if not papers:
         raise ValueError("None of the selected papers has content in the chosen sections.")
 

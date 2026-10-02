@@ -52,6 +52,10 @@ To add a normal tool:
 
 Launcher presentation code does not need to change.
 
+The Paper Notes tool card links to its main menu explicitly. Record-specific actions
+continue to use validated `?record=<paper-id>` deep links, so opening the tool directory
+never selects a paper while opening a newly created record still opens that exact paper.
+
 ## Unified paper records
 
 Papers created in Paper Notes use one durable workspace:
@@ -72,6 +76,14 @@ The hub can create the same record and then deep-link that exact validated recor
 The extractor remains independently runnable. PDFs uploaded directly to it continue to use its separately owned `extracted_exhibits/` library. Existing standalone runs are not migrated.
 
 Every linked or standalone re-analysis creates a new, non-overwriting manifest from the already saved `source.pdf`. The user may include or exclude appendix exhibits and add, change, or remove an explicit appendix starting page; the page must exist in the PDF. Earlier queues, approved screenshots, and authored Paper Notes content remain untouched.
+
+The Paper Notes main-menu order is stored separately in `data/papers/paper_order.json`,
+using stable record IDs. Paper creation adds a record at the top, manual moves update
+only this file, and note or metadata edits never affect position. The file is written
+atomically under `data/papers/.paper-order.lock`. On first use, installations without
+order metadata are migrated from the former newest-save-first menu order without
+rewriting any paper's `notes.json`; invalid or stale entries are repaired against the
+record folders that still exist.
 
 Only shared functions in `paper_notes.storage` and `paper_notes.extraction` should mutate linked paper records. Other tools must not write arbitrary files into another tool's storage.
 

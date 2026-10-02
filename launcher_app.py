@@ -75,6 +75,11 @@ for index, tool in enumerate(registry.tools):
         with st.container(border=True):
             st.subheader(f"{tool.icon} {tool.name}")
             st.write(tool.description)
-            st.link_button("Open in a new tab ↗", tool.url, width="stretch")
+            tool_url = (
+                f"{tool.url.rstrip('/')}?view=menu"
+                if tool.id == "paper-notes"
+                else tool.url
+            )
+            st.link_button("Open in a new tab ↗", tool_url, width="stretch")
 
 st.caption("All tools run on this computer. No paper content is sent to an external service.")

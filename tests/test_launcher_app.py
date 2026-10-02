@@ -23,6 +23,9 @@ class LauncherAppTests(unittest.TestCase):
         )
         self.assertIn("Add paper", subheaders)
         self.assertTrue(any("No paper content is sent" in item.value for item in app.caption))
+        urls = [button.proto.url for button in app.get("link_button")]
+        self.assertIn("http://localhost:8501?view=menu", urls)
+        self.assertIn("http://localhost:8502", urls)
 
     def test_created_record_actions_use_both_validated_record_deep_links(self):
         with tempfile.TemporaryDirectory() as temporary, patch.dict(

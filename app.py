@@ -26,6 +26,8 @@ from paper_notes.storage import (
     exhibit_image_path,
     list_records,
     load_notes,
+    move_exhibit,
+    move_record,
     record_dir,
     remove_exhibit_image,
     remove_exhibit_images,
@@ -471,9 +473,13 @@ def show_main_menu(records: list[dict]) -> None:
     if not visible_records:
         st.info("No papers currently have this category.")
 
+    order_positions = {
+        record["record_id"]: index for index, record in enumerate(loaded_records)
+    }
     for current in visible_records:
         status = section_completion(current)
         started = sum(status.values())
+        position = order_positions[current["record_id"]]
         with st.container(border=True):
             select_col, details_col, open_col = st.columns([0.7, 4.3, 1])
             with select_col:
@@ -482,6 +488,27 @@ def show_main_menu(records: list[dict]) -> None:
                     key=f"menu_select_{current['record_id']}",
                     help="Select this paper for category changes or a combined summary export.",
                 )
+                move_up_col, move_down_col = st.columns(2)
+                with move_up_col:
+                    if st.button(
+                        "↑",
+                        key=f"menu_move_up_{current['record_id']}",
+                        help="Move this paper up",
+                        disabled=position == 0,
+                        width="stretch",
+                    ):
+                        move_record(DATA_ROOT, current["record_id"], -1)
+                        st.rerun()
+                with move_down_col:
+                    if st.button(
+                        "↓",
+                        key=f"menu_move_down_{current['record_id']}",
+                        help="Move this paper down",
+                        disabled=position == len(loaded_records) - 1,
+                        width="stretch",
+                    ):
+                        move_record(DATA_ROOT, current["record_id"], 1)
+                        st.rerun()
             with details_col:
                 st.subheader(current["title"])
                 st.caption(
@@ -675,6 +702,7 @@ def show_main_menu(records: list[dict]) -> None:
 records = list_records(DATA_ROOT)
 
 linked_record = st.query_params.get("record")
+main_menu_requested = str(st.query_params.get("view", "")).casefold() == "menu"
 if linked_record:
     try:
         linked_notes = load_notes(DATA_ROOT, str(linked_record))
@@ -683,6 +711,11 @@ if linked_record:
         st.stop()
     st.session_state["active_record"] = linked_notes["record_id"]
     st.session_state.pop("main_menu", None)
+elif main_menu_requested:
+    st.session_state["main_menu"] = True
+    st.session_state["creating_record"] = False
+    st.session_state.pop("active_record", None)
+    del st.query_params["view"]
 
 with st.sidebar:
     st.title("Paper Notes")
@@ -928,7 +961,28 @@ with notes_col:
     remove_exhibit_id = None
     for index, exhibit in enumerate(notes.get("exhibits", []), start=1):
         expander_title = exhibit.get("identifier_title", "").strip() or f"Exhibit {index}"
-        with st.expander(expander_title, expanded=index == 1):
+        title_col, up_col, down_col = st.columns([8, 1, 1])
+        with title_col:
+            exhibit_panel = st.expander(expander_title, expanded=index == 1)
+        up_col.button(
+            "↑",
+            key=f"move_up_exhibit_{record_id}_{exhibit['id']}",
+            help="Move this exhibit up",
+            disabled=index == 1,
+            width="stretch",
+            on_click=move_exhibit,
+            args=(DATA_ROOT, record_id, exhibit["id"], -1),
+        )
+        down_col.button(
+            "↓",
+            key=f"move_down_exhibit_{record_id}_{exhibit['id']}",
+            help="Move this exhibit down",
+            disabled=index == len(notes.get("exhibits", [])),
+            width="stretch",
+            on_click=move_exhibit,
+            args=(DATA_ROOT, record_id, exhibit["id"], 1),
+        )
+        with exhibit_panel:
             top_col, remove_col = st.columns([5, 1])
             identifier_title = top_col.text_input(
                 "Exhibit identifier / title",

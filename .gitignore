@@ -17,6 +17,7 @@ htmlcov/
 # Local shell history and environment/secrets files never belong in the project.
 .bash_history
 .zsh_history
+.Rhistory
 .python_history
 .env
 .env.*
